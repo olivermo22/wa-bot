@@ -93,9 +93,10 @@ app.get("/", (_, res) => {
 })
 
 // fallback (para panel.html y otros)
-app.get("*", (_, res) => {
-  res.sendFile(path.join(FRONTEND, "login.html"))
+app.use((req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/panel.html'))
 })
+
 
 // ──────────────────────────────────────────────
 // HTTP + WEBSOCKET SERVER
