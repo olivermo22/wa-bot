@@ -16,10 +16,8 @@ export async function startBaileys() {
     logger: pino({ level: "silent" })
   })
 
-  // Mantener conectado
   sock.ev.on("creds.update", saveCreds)
 
-  // Enviar QR al panel
   sock.ev.on("connection.update", (update) => {
     const { qr, connection, lastDisconnect } = update
 
@@ -39,15 +37,10 @@ export async function startBaileys() {
     }
   })
 
-  // ────────────────────────────────────────────────
-  // MEMORIA MINI (10 mensajes por chat)
-  // ────────────────────────────────────────────────
+  // Mini memoria por chat
   const chatHistory = {}
   const typingTimers = {}
 
-  // ────────────────────────────────────────────────
-  // MANEJO DE MENSAJES
-  // ────────────────────────────────────────────────
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0]
     if (!msg.message) return
@@ -61,76 +54,63 @@ export async function startBaileys() {
 
     if (!text.trim()) return
 
-    console.log(`💬 Mensaje entrante de ${from}: ${text}`)
     global.broadcast("incoming", { from, message: text })
 
-    // Crear historial si no existe
     if (!chatHistory[from]) chatHistory[from] = []
 
-    // Agregar mensaje del usuario
     chatHistory[from].push({ role: "user", content: text })
+    if (chatHistory[from].length > 10) chatHistory[from].slice(-10)
 
-    // Limitar historial a 10
-    if (chatHistory[from].length > 10) {
-      chatHistory[from] = chatHistory[from].slice(-10)
-    }
-
-    // ────────────────────────────────────────────────
-    // EVITAR RESPONDER MENSAJES SALTEADOS
-    // Esperar 2.5 segundos desde el último mensaje
-    // ────────────────────────────────────────────────
+    // esperar si manda varios mensajes seguidos
     if (typingTimers[from]) clearTimeout(typingTimers[from])
 
     typingTimers[from] = setTimeout(async () => {
       try {
-        // TYPING DE 3 SEGUNDOS
         await sock.sendPresenceUpdate("composing", from)
         await delay(3000)
         await sock.sendPresenceUpdate("paused", from)
-      } catch (err) {
-        console.log("⚠ Error enviando typing:", err)
-      }
+      } catch (_) {}
 
-      // Prompt del panel
       const systemPrompt = loadPrompt()
+      const isFirst = chatHistory[from].length === 1
 
-      const isFirstMessage = chatHistory[from].length === 1
-
-      const greeting = isFirstMessage
-        ? "Hola 👋 Gracias por escribir a Consultoría Virtual. Estoy listo para ayudarte."
+      const greeting = isFirst
+        ? "¡Hola! Gracias por escribir a Consultoría Virtual. Estoy aquí para ayudarte."
         : ""
 
-      // Construir mensajes OpenAI
-      const messagesForAI = [
+      const finalMessages = [
         { role: "system", content: systemPrompt },
         ...(greeting ? [{ role: "assistant", content: greeting }] : []),
         ...chatHistory[from]
       ]
 
-      // Llamada a OpenAI
       const completion = await openai.chat.completions.create({
         model: process.env.MODEL,
-        messages: messagesForAI,
-        temperature: 0.3
+        messages: finalMessages,
+        temperature: 0.2
       })
 
       const reply = completion.choices[0].message.content.trim()
 
-      // Guardar en historial
       chatHistory[from].push({ role: "assistant", content: reply })
+      if (chatHistory[from].length > 10) chatHistory[from] = chatHistory[from].slice(-10)
 
-      if (chatHistory[from].length > 10) {
-        chatHistory[from] = chatHistory[from].slice(-10)
-      }
-
-      // Enviar mensaje
       await sock.sendMessage(from, { text: reply })
 
       global.broadcast("outgoing", { to: from, message: reply })
-
-      console.log(`📤 Enviado a ${from}: ${reply}`)
     }, 2500)
   })
 
   return sock
+}
+
+// ─────────────────────────────
+// FUNCIÓN FALTANTE (obligatoria)
+// ─────────────────────────────
+export async function disconnectClient(sock) {
+  try {
+    await sock.logout()
+  } catch (err) {
+    console.log("❌ Error al desconectar:", err)
+  }
 }
