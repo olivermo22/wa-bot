@@ -1,7 +1,8 @@
 import {
   default as makeWASocket,
   useMultiFileAuthState,
-  Browsers
+  Browsers,
+  delay
 } from "@whiskeysockets/baileys"
 import P from "pino"
 import fs from "fs"
@@ -100,7 +101,7 @@ export async function loadClient() {
   })
 
   // ─────────────────────────────
-  // MANEJO DE MENSAJES
+  // MANEJO DE MENSAJES (con typing y delay)
   // ─────────────────────────────
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0]
@@ -121,6 +122,17 @@ export async function loadClient() {
       from,
       message: textMessage
     })
+
+    // ─────────────────────────────
+    // 🟦 Simular "escribiendo..." (typing) 3 segundos
+    // ─────────────────────────────
+    try {
+      await sock.sendPresenceUpdate("composing", from)
+      await delay(3000) // Esperar 3 segundos
+      await sock.sendPresenceUpdate("paused", from)
+    } catch (err) {
+      console.log("⚠️ Error en typing:", err)
+    }
 
     // Construir respuesta con OpenAI
     const systemPrompt = loadPrompt()
