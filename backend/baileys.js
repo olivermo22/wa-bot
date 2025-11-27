@@ -1,206 +1,136 @@
-import {
-  default as makeWASocket,
-  useMultiFileAuthState,
-  Browsers,
-  delay
-} from "@whiskeysockets/baileys"
-import P from "pino"
-import fs from "fs"
-import path from "path"
-import { fileURLToPath } from "url"
-import OpenAI from "openai"
+// backend/baileys.js
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from "@whiskeysockets/baileys"
+import pino from "pino"
+import { loadPrompt } from "./prompt.js"
+import { openai } from "./openai.js"
 
-// Necesario para rutas correctas
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
 
-// ─────────────────────────────────────────────────────────────
-// CONFIG
-// ─────────────────────────────────────────────────────────────
-const SESSION_FOLDER = path.join(__dirname, "storage", "session")
-const CONFIG_PATH = path.join(__dirname, "storage", "config.json")
-
-// Crear carpetas si no existen
-if (!fs.existsSync(SESSION_FOLDER)) fs.mkdirSync(SESSION_FOLDER, { recursive: true })
-
-// OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-})
-
-const MODEL = process.env.MODEL || "gpt-4o-mini"
-
-// Variables globales
-global.sock = null
-global.LAST_QR = null
-
-// ─────────────────────────────────────────────────────────────
-// CARGAR CONFIG (prompt editable)
-// ─────────────────────────────────────────────────────────────
-function loadPrompt() {
-  try {
-    const data = fs.readFileSync(CONFIG_PATH)
-    const json = JSON.parse(data)
-    return json.systemPrompt || "Eres un asistente útil."
-  } catch {
-    return "Eres un asistente útil."
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// FUNCIONES PÚBLICAS: loadClient / regenerateQR / disconnectClient
-// ─────────────────────────────────────────────────────────────
-
-export async function loadClient() {
-  console.log("🔵 Inicializando cliente Baileys...")
-
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER)
+export async function startBaileys() {
+  const { state, saveCreds } = await useMultiFileAuthState("./session")
 
   const sock = makeWASocket({
     printQRInTerminal: false,
-    logger: P({ level: "silent" }),
     auth: state,
-    browser: Browsers.ubuntu("Chrome"),
-    syncFullHistory: false,
-    markOnlineOnConnect: false
+    browser: ["OliverBot", "Chrome", "1.0.0"],
+    logger: pino({ level: "silent" })
   })
 
-  global.sock = sock
-
-  // Guardar eventos
+  // Mantener conectado
   sock.ev.on("creds.update", saveCreds)
 
-  // QR
-  sock.ev.on("connection.update", async (update) => {
+  // Enviar QR al panel
+  sock.ev.on("connection.update", (update) => {
     const { qr, connection, lastDisconnect } = update
 
     if (qr) {
-      global.LAST_QR = qr
-      console.log("📌 Nuevo QR generado")
-      global.broadcast("qr", qr)
-    }
-
-    if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== 401
-
-      console.log("❌ Conexión cerrada:", lastDisconnect?.error)
-      if (shouldReconnect) {
-        console.log("🔄 Reintentando conexión...")
-        await loadClient()
-      } else {
-        console.log("🚫 Sesión eliminada — requiere nuevo QR")
-      }
+      global.broadcast("qr", { qr })
     }
 
     if (connection === "open") {
-      console.log("✅ Conectado correctamente")
-      global.LAST_QR = null
-      global.broadcast("connected", true)
+      global.broadcast("status", { connected: true })
+    }
+
+    if (connection === "close") {
+      const reason = lastDisconnect?.error?.output?.statusCode
+      if (reason !== DisconnectReason.loggedOut) {
+        startBaileys()
+      }
     }
   })
 
-  // ─────────────────────────────
-  // MANEJO DE MENSAJES (con typing y delay)
-  // ─────────────────────────────
+  // ────────────────────────────────────────────────
+  // MEMORIA MINI (10 mensajes por chat)
+  // ────────────────────────────────────────────────
+  const chatHistory = {}
+  const typingTimers = {}
+
+  // ────────────────────────────────────────────────
+  // MANEJO DE MENSAJES
+  // ────────────────────────────────────────────────
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0]
     if (!msg.message) return
     if (msg.key.fromMe) return
 
     const from = msg.key.remoteJid
-    const textMessage = msg.message.conversation ||
-                        msg.message.extendedTextMessage?.text ||
-                        ""
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      ""
 
-    if (!textMessage) return
+    if (!text.trim()) return
 
-    console.log(`💬 Mensaje de ${from}: ${textMessage}`)
+    console.log(`💬 Mensaje entrante de ${from}: ${text}`)
+    global.broadcast("incoming", { from, message: text })
 
-    // Notificar al panel
-    global.broadcast("incoming", {
-      from,
-      message: textMessage
-    })
+    // Crear historial si no existe
+    if (!chatHistory[from]) chatHistory[from] = []
 
-    // ─────────────────────────────
-    // 🟦 Simular "escribiendo..." (typing) 3 segundos
-    // ─────────────────────────────
-    try {
-      await sock.sendPresenceUpdate("composing", from)
-      await delay(3000) // Esperar 3 segundos
-      await sock.sendPresenceUpdate("paused", from)
-    } catch (err) {
-      console.log("⚠️ Error en typing:", err)
+    // Agregar mensaje del usuario
+    chatHistory[from].push({ role: "user", content: text })
+
+    // Limitar historial a 10
+    if (chatHistory[from].length > 10) {
+      chatHistory[from] = chatHistory[from].slice(-10)
     }
 
-    // Construir respuesta con OpenAI
-    const systemPrompt = loadPrompt()
+    // ────────────────────────────────────────────────
+    // EVITAR RESPONDER MENSAJES SALTEADOS
+    // Esperar 2.5 segundos desde el último mensaje
+    // ────────────────────────────────────────────────
+    if (typingTimers[from]) clearTimeout(typingTimers[from])
 
-    const completion = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [
+    typingTimers[from] = setTimeout(async () => {
+      try {
+        // TYPING DE 3 SEGUNDOS
+        await sock.sendPresenceUpdate("composing", from)
+        await delay(3000)
+        await sock.sendPresenceUpdate("paused", from)
+      } catch (err) {
+        console.log("⚠ Error enviando typing:", err)
+      }
+
+      // Prompt del panel
+      const systemPrompt = loadPrompt()
+
+      const isFirstMessage = chatHistory[from].length === 1
+
+      const greeting = isFirstMessage
+        ? "Hola 👋 Gracias por escribir a Consultoría Virtual. Estoy listo para ayudarte."
+        : ""
+
+      // Construir mensajes OpenAI
+      const messagesForAI = [
         { role: "system", content: systemPrompt },
-        { role: "user", content: textMessage }
-      ],
-      temperature: 0.4
-    })
+        ...(greeting ? [{ role: "assistant", content: greeting }] : []),
+        ...chatHistory[from]
+      ]
 
-    const reply = completion.choices[0].message.content.trim()
+      // Llamada a OpenAI
+      const completion = await openai.chat.completions.create({
+        model: process.env.MODEL,
+        messages: messagesForAI,
+        temperature: 0.3
+      })
 
-    // Enviar respuesta
-    await sock.sendMessage(from, { text: reply })
+      const reply = completion.choices[0].message.content.trim()
 
-    // Notificar al panel
-    global.broadcast("outgoing", {
-      to: from,
-      message: reply
-    })
+      // Guardar en historial
+      chatHistory[from].push({ role: "assistant", content: reply })
 
-    console.log(`📤 Respuesta enviada a ${from}`)
+      if (chatHistory[from].length > 10) {
+        chatHistory[from] = chatHistory[from].slice(-10)
+      }
+
+      // Enviar mensaje
+      await sock.sendMessage(from, { text: reply })
+
+      global.broadcast("outgoing", { to: from, message: reply })
+
+      console.log(`📤 Enviado a ${from}: ${reply}`)
+    }, 2500)
   })
-}
 
-// ─────────────────────────────────────────────────────────────
-// REGENERAR QR
-// ─────────────────────────────────────────────────────────────
-export async function regenerateQR() {
-  console.log("🔄 Forzando regeneración de QR...")
-
-  if (!global.sock) {
-    console.log("⚠️ Sock no existente, regenerando cliente...")
-    await loadClient()
-    return
-  }
-
-  // Forzar que genere nuevo QR → cerrar sesión temporalmente
-  await disconnectClient(true)
-  await loadClient()
-}
-
-// ─────────────────────────────────────────────────────────────
-// DESCONECTAR SESIÓN
-// ─────────────────────────────────────────────────────────────
-export async function disconnectClient(keepFiles = false) {
-  try {
-    console.log("🟠 Desconectando sesión...")
-
-    if (global.sock) {
-      await global.sock.logout()
-      await global.sock.end()
-    }
-
-    global.sock = null
-    global.LAST_QR = null
-
-    if (!keepFiles) {
-      console.log("🗑 Eliminando archivos de sesión...")
-      fs.rmSync(SESSION_FOLDER, { recursive: true, force: true })
-      fs.mkdirSync(SESSION_FOLDER, { recursive: true })
-    }
-
-    global.broadcast("connected", false)
-  } catch (e) {
-    console.error("❌ Error al desconectar:", e)
-  }
+  return sock
 }
