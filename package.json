@@ -1,0 +1,22 @@
+{
+  "name": "wa-panel-oliver",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "backend/index.js",
+  "scripts": {
+    "start": "node backend/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "express": "latest",
+    "ws": "latest",
+    "dotenv": "latest",
+    "cors": "latest",
+    "body-parser": "latest",
+    "pino": "latest",
+    "qrcode": "latest"
+  }
+}

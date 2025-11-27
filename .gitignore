@@ -1,0 +1,4 @@
+.env
+backend/storage/session/
+backend/storage/config.json
+node_modules/

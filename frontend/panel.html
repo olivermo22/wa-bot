@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel WhatsApp</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="bg-gray-100 p-4">
+
+  <div class="max-w-5xl mx-auto">
+
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-3xl font-bold">Panel WhatsApp Bot</h1>
+      <span id="status" class="px-4 py-2 rounded bg-gray-400 text-white">Desconectado</span>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+
+      <!-- QR -->
+      <div class="bg-white p-4 shadow rounded">
+        <h2 class="font-bold mb-2">Código QR</h2>
+        <img id="qrImg" src="" class="border rounded w-full hidden">
+        <p id="noQR" class="text-gray-500 text-center mt-4">No hay QR disponible</p>
+
+        <div class="mt-4 space-y-2">
+          <button onclick="generateQR()" class="btn w-full bg-blue-600">Generar QR</button>
+          <button onclick="regenerateQR()" class="btn w-full bg-yellow-600">Regenerar QR</button>
+          <button onclick="disconnect()" class="btn w-full bg-red-600">Desconectar</button>
+        </div>
+      </div>
+
+      <!-- Últimos mensajes -->
+      <div class="bg-white p-4 shadow rounded">
+        <h2 class="font-bold mb-2">Últimos mensajes</h2>
+
+        <div class="mb-4">
+          <p class="text-sm font-medium text-gray-600">Entrante:</p>
+          <div id="incoming" class="bubble bg-gray-200"></div>
+        </div>
+
+        <div>
+          <p class="text-sm font-medium text-gray-600">Saliente:</p>
+          <div id="outgoing" class="bubble bg-blue-200"></div>
+        </div>
+      </div>
+
+      <!-- Instrucciones del BOT -->
+      <div class="bg-white p-4 shadow rounded md:col-span-1">
+        <h2 class="font-bold mb-2">Instrucciones del bot</h2>
+        <textarea id="prompt" class="w-full h-64 p-2 border rounded"></textarea>
+        <button onclick="saveConfig()" class="btn bg-green-600 mt-3 w-full">Guardar</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+
+</body>
+</html>
