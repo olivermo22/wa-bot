@@ -11,12 +11,13 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
-    "express": "latest",
-    "ws": "latest",
-    "dotenv": "latest",
-    "cors": "latest",
     "body-parser": "latest",
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "openai": "^6.9.1",
     "pino": "latest",
-    "qrcode": "latest"
+    "qrcode": "latest",
+    "ws": "latest"
   }
 }
