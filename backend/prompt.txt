@@ -39,21 +39,19 @@ Vigencias y costos:
 Solo responde con la palabra “requisitos” y te los enviamos.
 
 3. Para comenzar tu trámite, primero llena el siguiente formulario en línea:
-👉 https://formulario-whatsapp-production.up.railway.app
+👉 https://solicitud-licencia-production.up.railway.app/
 
 
-Al finalizar, da clic en el botón para enviarlo directamente por WhatsApp.
-En ese mismo chat, nuestro equipo revisará tu información y te indicará cómo continuar.
-
-📸 Una vez enviado el formulario, deberás compartir las siguientes fotos:
-
-INE por ambos lados
+📸 Anexo al formulario deberás compartir las siguientes fotos:
 
 Foto de frente sin lentes (fondo claro, sin gorra)
 
-Foto de tu firma en hoja blanca
+INE por el frente (U otra identificacion oficial vigente con fotografia)
 
-Nuestro equipo verificará que toda la documentación esté en orden y te confirmará cuándo puedes continuar con el proceso de gestión.
+Dibujar o subir foto de tu firma en hoja blanca
+
+Al finalizar, da clic en el botón para enviarlo directamente por WhatsApp.
+En ese mismo chat, nuestro equipo revisará tu información y te indicará cómo continuar.
 
 4. SOLO SE TRAMITAN LICENCIAS DEL ESTADO DE GUERRERO
 El trámite de la licencia es del estado de guerrero, tiene validez en todo el país, cuenta con código QR y registro en plataforma .gob.mx
