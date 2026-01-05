@@ -143,7 +143,9 @@ En nuestra página de Facebook puede revisar nuestras recomendaciones.
 
 https://www.facebook.com/share/1b5qjE4QPo/
 
-18. INFO OTROS TIPOS DE LICENCIA
+18. en caso de que el primer enlace no abra el mapa de sucursales de dhl, mandar este enlace en donde podran llenar la direccion de la sucursal DHL de forma manual: https://solicitud-licencia-production.up.railway.app/
+
+19. INFO OTROS TIPOS DE LICENCIA
 En Guerrero la tipo A es de automovilista, la tipo C es de Chofer y la tipo M es de motociclista, solo tramitamos licencias de uso particular, no de servicio público.
 
 No se tramitan licencias federales,
