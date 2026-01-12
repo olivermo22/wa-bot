@@ -9,6 +9,7 @@ import { loadPrompt } from "./prompt.js"
 import { openai } from "./openai.js"
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms))
+const MIN_REPLY_DELAY_MS = 9_000 + Math.floor(Math.random() * 6_000) // 9–15 segundos
 
 let sock = null
 
@@ -58,8 +59,8 @@ export async function loadClient() {
       const reason = lastDisconnect?.error?.output?.statusCode
 
       if (reason !== DisconnectReason.loggedOut) {
-        loadClient()
-      }
+  setTimeout(() => loadClient(), 3000)
+    }
     }
   })
 
@@ -123,42 +124,66 @@ function setupMessageHandler() {
     if (typingTimers[from]) clearTimeout(typingTimers[from])
 
     typingTimers[from] = setTimeout(async () => {
-      try {
-        await sock.sendPresenceUpdate("composing", from)
-        await delay(3000)
-        await sock.sendPresenceUpdate("paused", from)
-      } catch {}
+  const systemPrompt = loadPrompt()
+  const isFirst = chatHistory[from].length === 1
 
-      const systemPrompt = loadPrompt()
-      const isFirst = chatHistory[from].length === 1
+  const greeting = isFirst
+    ? "Hola 👋 Gracias por escribir a Consultoría Virtual. Estoy listo para ayudarte."
+    : ""
 
-      const greeting = isFirst
-        ? "Hola 👋 Gracias por escribir a Consultoría Virtual. Estoy listo para ayudarte."
-        : ""
+  const messagesForAI = [
+    { role: "system", content: systemPrompt },
+    ...(greeting ? [{ role: "assistant", content: greeting }] : []),
+    ...chatHistory[from]
+  ]
 
-      const messagesForAI = [
-        { role: "system", content: systemPrompt },
-        ...(greeting ? [{ role: "assistant", content: greeting }] : []),
-        ...chatHistory[from]
-      ]
+  // ⏱️ Arranca contador
+  const typingStart = Date.now()
 
-      const completion = await openai.chat.completions.create({
-        model: process.env.MODEL,
-        messages: messagesForAI,
-        temperature: 0.2
-      })
+  // ✍️ Empieza a escribir
+  try {
+    await sock.sendPresenceUpdate("composing", from)
+  } catch {}
 
-      const reply = completion.choices[0].message.content.trim()
+  // 🤖 OpenAI en paralelo
+  const completionPromise = openai.chat.completions.create({
+    model: process.env.MODEL,
+    messages: messagesForAI,
+    temperature: 0.2
+  })
 
-      chatHistory[from].push({ role: "assistant", content: reply })
-      if (chatHistory[from].length > 10) {
-        chatHistory[from] = chatHistory[from].slice(-10)
-      }
+  const completion = await completionPromise
+  const reply =
+    completion.choices?.[0]?.message?.content?.trim() ||
+    "Perfecto, enseguida te ayudo 😊"
 
-      await sock.sendMessage(from, { text: reply })
-      global.broadcast("outgoing", { to: from, message: reply })
+  // ⏳ Espera mínima de 18s desde que empezó a escribir
+  const elapsed = Date.now() - typingStart
+  const remaining = Math.max(0, MIN_REPLY_DELAY_MS - elapsed)
+  if (remaining > 0) await delay(remaining)
 
-      console.log("📤 Respondido:", reply)
-    }, 2500)
+  // 🛑 Deja de escribir
+  try {
+    await sock.sendPresenceUpdate("paused", from)
+  } catch {}
+
+  // Guardar historial
+  chatHistory[from].push({ role: "assistant", content: reply })
+  if (chatHistory[from].length > 10) {
+    chatHistory[from] = chatHistory[from].slice(-10)
+  }
+
+  // 📤 Enviar mensaje
+  await sock.sendMessage(from, { text: reply })
+  global.broadcast("outgoing", { to: from, message: reply })
+
+  console.log("📤 Respondido (10s delay):", reply)
+
+  // 🧹 Limpieza (evita fuga de RAM)
+  clearTimeout(typingTimers[from])
+  delete typingTimers[from]
+
+}, 9000)
+
   })
 }
