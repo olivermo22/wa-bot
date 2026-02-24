@@ -10,14 +10,14 @@
     "node": "20.x"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
-    "body-parser": "latest",
-    "cors": "latest",
-    "dotenv": "latest",
-    "express": "latest",
-    "openai": "^6.9.1",
-    "pino": "latest",
-    "qrcode": "latest",
-    "ws": "latest"
+    "@whiskeysockets/baileys": "6.7.21",
+    "express": "4.21.2",
+    "cors": "2.8.5",
+    "dotenv": "17.2.3",
+    "body-parser": "1.20.3",
+    "pino": "9.14.0",
+    "qrcode": "1.5.4",
+    "ws": "8.18.3",
+    "openai": "^6.9.1"
   }
 }
