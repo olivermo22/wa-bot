@@ -1,19 +1,16 @@
+// backend/index.js
+import "dotenv/config"
+
 import express from "express"
 import cors from "cors"
 import bodyParser from "body-parser"
 import path from "path"
 import { fileURLToPath } from "url"
-import dotenv from "dotenv"
 import { createServer } from "http"
 import { WebSocketServer } from "ws"
-import {
-  loadClient,
-  regenerateQR,
-  disconnectClient
-} from "./baileys.js"
 import fs from "fs"
 
-dotenv.config()
+import { loadClient, regenerateQR, disconnectClient } from "./baileys.js"
 
 // Para rutas correctas (ESM)
 const __filename = fileURLToPath(import.meta.url)
@@ -36,14 +33,16 @@ app.post("/api/login", (req, res) => {
   if (user === process.env.PANEL_USER && pass === process.env.PANEL_PASS) {
     return res.json({ ok: true })
   }
-
   res.status(401).json({ ok: false })
 })
 
 // ──────────────────────────────────────────────
 // CONFIG del BOT
 // ──────────────────────────────────────────────
-const CONFIG_PATH = path.join(__dirname, "storage", "config.json")
+const STORAGE_DIR = path.join(__dirname, "storage")
+const CONFIG_PATH = path.join(STORAGE_DIR, "config.json")
+
+if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true })
 
 // Crear config si no existe
 if (!fs.existsSync(CONFIG_PATH)) {
@@ -54,7 +53,7 @@ if (!fs.existsSync(CONFIG_PATH)) {
 }
 
 app.get("/api/config", (_, res) => {
-  res.json(JSON.parse(fs.readFileSync(CONFIG_PATH)))
+  res.json(JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")))
 })
 
 app.post("/api/config", (req, res) => {
@@ -87,23 +86,20 @@ app.post("/api/disconnect", async (_, res) => {
 // ──────────────────────────────────────────────
 app.use(express.static(FRONTEND))
 
-// si entra a / directamente → login
 app.get("/", (_, res) => {
   res.sendFile(path.join(FRONTEND, "login.html"))
 })
 
-// fallback (para panel.html y otros)
 app.use((req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/panel.html'))
+  res.sendFile(path.join(FRONTEND, "panel.html"))
 })
-
 
 // ──────────────────────────────────────────────
 // HTTP + WEBSOCKET SERVER
 // ──────────────────────────────────────────────
 const httpServer = createServer(app)
-
 const wss = new WebSocketServer({ server: httpServer })
+
 global.WS_CLIENTS = []
 
 wss.on("connection", (ws) => {
@@ -111,14 +107,18 @@ wss.on("connection", (ws) => {
   console.log("🟦 Panel conectado vía WebSocket")
 
   ws.on("close", () => {
-    global.WS_CLIENTS = global.WS_CLIENTS.filter(c => c !== ws)
+    global.WS_CLIENTS = global.WS_CLIENTS.filter((c) => c !== ws)
   })
 })
 
 // Función global para mandar eventos al panel
 global.broadcast = (type, data) => {
   const payload = JSON.stringify({ type, data })
-  global.WS_CLIENTS.forEach(ws => ws.send(payload))
+  global.WS_CLIENTS.forEach((ws) => {
+    try {
+      ws.send(payload)
+    } catch {}
+  })
 }
 
 // ──────────────────────────────────────────────

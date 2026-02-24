@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.21",
-    "express": "4.21.2",
-    "cors": "2.8.5",
-    "dotenv": "17.2.3",
     "body-parser": "1.20.3",
-    "pino": "9.14.0",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.21.2",
+    "openai": "^6.9.1",
+    "pino": "9.4.0",
     "qrcode": "1.5.4",
-    "ws": "8.18.3",
-    "openai": "^6.9.1"
+    "ws": "8.18.3"
   }
 }

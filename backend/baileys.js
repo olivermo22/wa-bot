@@ -1,4 +1,6 @@
 // backend/baileys.js
+import "dotenv/config"
+
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason
@@ -8,23 +10,20 @@ import fs from "fs"
 import { loadPrompt } from "./prompt.js"
 import { openai } from "./openai.js"
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms))
-const MIN_REPLY_DELAY_MS = 9_000 + Math.floor(Math.random() * 6_000) // 9–15 segundos
+const delay = (ms) => new Promise((res) => setTimeout(res, ms))
+const MIN_REPLY_DELAY_MS = 9_000 + Math.floor(Math.random() * 6_000) // 9–15s
+
+const SESSION_DIR = process.env.SESSION_DIR || "./session"
 
 let sock = null
 let starting = false
-let messageHandlerReady = false
+let reconnectAttempts = 0
+let reconnectTimer = null
 
-// ✅ Soporta sesión en volumen (Railway): SESSION_DIR=/data/session
-const SESSION_DIR = process.env.SESSION_DIR || "./session"
-
-// ───────────────────────────────────────────────
-// HELPERS
-// ───────────────────────────────────────────────
-function safeBroadcast(event, payload) {
-  try {
-    if (typeof global.broadcast === "function") global.broadcast(event, payload)
-  } catch {}
+function ensureSessionDir() {
+  if (!fs.existsSync(SESSION_DIR)) {
+    fs.mkdirSync(SESSION_DIR, { recursive: true })
+  }
 }
 
 function clearSessionFolder() {
@@ -32,168 +31,158 @@ function clearSessionFolder() {
     if (fs.existsSync(SESSION_DIR)) {
       fs.rmSync(SESSION_DIR, { recursive: true, force: true })
     }
-  } catch (e) {
-    console.log("⚠️ No pude borrar sesión:", e?.message || e)
-  }
+  } catch {}
+  ensureSessionDir()
 }
 
-async function stopSocket() {
+function scheduleReconnect(statusCode) {
+  // backoff exponencial (tope 2 min)
+  const base = 3_000
+  const exp = Math.min(reconnectAttempts, 6)
+  let wait = Math.min(120_000, base * Math.pow(2, exp))
+
+  // 405 / 429: normalmente es por rate-limit/bloqueo temporal → espera más
+  if (statusCode === 405) wait = Math.max(wait, 60_000)
+  if (statusCode === 429) wait = Math.max(wait, 120_000)
+
+  reconnectAttempts++
+
+  console.log(`🟠 Reintento en ${Math.round(wait / 1000)}s (statusCode=${statusCode ?? "?"})`)
+
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => {
+    loadClient().catch(() => {})
+  }, wait)
+}
+
+function safeEndSocket() {
   try {
-    if (sock) {
-      // Cierra el socket actual (sin hacer logout)
-      sock.end?.(new Error("Restart"))
-    }
+    sock?.ev?.removeAllListeners("messages.upsert")
+    sock?.ev?.removeAllListeners("connection.update")
   } catch {}
+
+  try {
+    sock?.end?.()
+  } catch {}
+
   sock = null
 }
 
-function getDisconnectCode(lastDisconnect) {
-  // En Baileys normalmente viene como Boom con .output.statusCode,
-  // pero lo sacamos de forma segura por si cambia la forma.
-  try {
-    const err = lastDisconnect?.error
-    return (
-      err?.output?.statusCode ??
-      err?.output?.payload?.statusCode ??
-      err?.statusCode ??
-      null
-    )
-  } catch {
-    return null
-  }
-}
-
-// ───────────────────────────────────────────────
-// INICIAR CLIENTE (USADO POR index.js)
-// ───────────────────────────────────────────────
 export async function loadClient() {
   if (starting) return sock
   starting = true
 
-  console.log("🔵 Iniciando cliente Baileys...")
-
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR)
+    ensureSessionDir()
 
-    // Evitar sockets duplicados
-    await stopSocket()
+    // Evita 2 instancias peleándose por listeners/sock
+    if (sock) safeEndSocket()
+
+    console.log("🔵 Iniciando cliente Baileys...")
+
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR)
 
     sock = makeWASocket({
       printQRInTerminal: false,
       auth: state,
       browser: ["OliverPanel", "Chrome", "1.0.0"],
-      logger: pino({ level: "silent" })
+      logger: pino({ level: "silent" }),
+
+      // valores “cloud friendly”
+      connectTimeoutMs: 60_000,
+      keepAliveIntervalMs: 20_000,
+      defaultQueryTimeoutMs: 0,
+      markOnlineOnConnect: false
     })
 
     sock.ev.on("creds.update", saveCreds)
 
-    sock.ev.on("connection.update", async (update) => {
+    sock.ev.on("connection.update", (update) => {
       const { qr, connection, lastDisconnect } = update
 
       if (qr) {
         global.LAST_QR = qr
-        safeBroadcast("qr", { qr })
+        // para tu panel via WS: manda el string directo
+        global.broadcast?.("qr", qr)
         console.log("⚪ Nuevo QR listo")
       }
 
       if (connection === "open") {
+        reconnectAttempts = 0
         console.log("🟢 WhatsApp conectado")
-        safeBroadcast("status", { connected: true })
+        global.broadcast?.("connected", true)
       }
 
       if (connection === "close") {
-        const code = getDisconnectCode(lastDisconnect)
-        console.log("🔴 Conexión cerrada. code =", code, "raw =", lastDisconnect?.error?.message || lastDisconnect?.error)
+        global.broadcast?.("connected", false)
 
-        safeBroadcast("status", { connected: false, code })
+        const statusCode =
+          lastDisconnect?.error?.output?.statusCode ??
+          lastDisconnect?.error?.data?.statusCode
 
-        // 1) Si te desloguearon, hay que limpiar sesión para forzar QR
-        if (code === DisconnectReason.loggedOut) {
-          console.log("🧨 loggedOut → limpiar sesión y forzar QR")
-          clearSessionFolder()
-          global.LAST_QR = null
-          await delay(1200)
-          starting = false
-          return loadClient()
-        }
+        console.log("🔴 Conexión cerrada.", "code =", statusCode, "raw =", lastDisconnect?.error?.message || "Connection Failure")
 
-        // 2) Sesión mala/corrupta (típico cuando se actualiza Baileys o creds dañadas)
-        if (code === DisconnectReason.badSession) {
-          console.log("🧨 badSession → limpiar sesión y forzar QR")
-          clearSessionFolder()
-          global.LAST_QR = null
-          await delay(1200)
-          starting = false
-          return loadClient()
-        }
-
-        // 3) Otra instancia tomó control (no reconectar o será loop)
-        if (code === DisconnectReason.connectionReplaced) {
-          console.log("⚠️ connectionReplaced → otra sesión ya está conectada. No reconecto.")
+        // loggedOut: ya no reconectes, requiere QR nuevo
+        if (statusCode === DisconnectReason.loggedOut) {
+          console.log("🔒 Sesión cerrada (loggedOut). Necesitas regenerar QR.")
           return
         }
 
-        // 4) Default: reintentar
-        await delay(3000)
-        starting = false
-        return loadClient()
+        scheduleReconnect(statusCode)
       }
     })
 
-    // ✅ Importante: NO montar handler de mensajes varias veces
-    if (!messageHandlerReady) {
-      setupMessageHandler()
-      messageHandlerReady = true
-    }
+    setupMessageHandler(sock)
 
     return sock
-  } catch (err) {
-    console.log("❌ Error al iniciar Baileys:", err?.message || err)
-    await delay(3000)
-    starting = false
-    return loadClient()
   } finally {
-    // Si no llegó ningún update, liberamos el lock
     starting = false
   }
 }
 
-// ───────────────────────────────────────────────
-// REGENERAR QR (limpiar sesión)
-// ───────────────────────────────────────────────
 export async function regenerateQR() {
   console.log("🟡 Regenerando QR...")
-  await stopSocket()
-  clearSessionFolder()
+
+  // corta socket y limpia sesión
+  try {
+    await sock?.logout?.()
+  } catch {}
+  safeEndSocket()
+
   global.LAST_QR = null
-  await delay(800)
+  global.broadcast?.("qr", null)
+  global.broadcast?.("connected", false)
+
+  clearSessionFolder()
+  reconnectAttempts = 0
+
   await loadClient()
 }
 
-// ───────────────────────────────────────────────
-// DESCONECTAR CLIENTE
-// ───────────────────────────────────────────────
 export async function disconnectClient() {
   if (!sock) return
+
   try {
     await sock.logout()
     console.log("🔌 Cliente desconectado")
   } catch (err) {
-    console.log("❌ Error al desconectar:", err?.message || err)
+    console.log("❌ Error al desconectar:", err)
   } finally {
-    sock = null
-    global.LAST_QR = null
+    safeEndSocket()
+    global.broadcast?.("connected", false)
   }
 }
 
-// ───────────────────────────────────────────────
-// MANEJO DE MENSAJES (IA + memoria + typing)
-// ───────────────────────────────────────────────
-function setupMessageHandler() {
+function setupMessageHandler(socket) {
+  // importante: evita duplicar listeners en reconexiones
+  try {
+    socket.ev.removeAllListeners("messages.upsert")
+  } catch {}
+
   const chatHistory = {}
   const typingTimers = {}
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
+  socket.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages?.[0]
     if (!msg?.message) return
     if (msg.key?.fromMe) return
@@ -207,7 +196,7 @@ function setupMessageHandler() {
     if (!text.trim()) return
 
     console.log("💬 Entrante:", from, text)
-    safeBroadcast("incoming", { from, message: text })
+    global.broadcast?.("incoming", { from, message: text })
 
     if (!chatHistory[from]) chatHistory[from] = []
     chatHistory[from].push({ role: "user", content: text })
@@ -229,43 +218,38 @@ function setupMessageHandler() {
         ...chatHistory[from]
       ]
 
-      // ⏱️ Arranca contador
       const typingStart = Date.now()
 
-      // ✍️ Empieza a escribir
-      try { await sock.sendPresenceUpdate("composing", from) } catch {}
-
-      let reply = "Perfecto, enseguida te ayudo 😊"
       try {
-        const completion = await openai.chat.completions.create({
-          model: process.env.MODEL,
-          messages: messagesForAI,
-          temperature: 0.2
-        })
-        reply = completion.choices?.[0]?.message?.content?.trim() || reply
-      } catch (e) {
-        console.log("❌ OpenAI error:", e?.message || e)
-      }
+        await socket.sendPresenceUpdate("composing", from)
+      } catch {}
 
-      // ⏳ Espera mínima
+      const completion = await openai.chat.completions.create({
+        model: process.env.MODEL,
+        messages: messagesForAI,
+        temperature: 0.2
+      })
+
+      const reply =
+        completion.choices?.[0]?.message?.content?.trim() ||
+        "Perfecto, enseguida te ayudo 😊"
+
       const elapsed = Date.now() - typingStart
       const remaining = Math.max(0, MIN_REPLY_DELAY_MS - elapsed)
       if (remaining > 0) await delay(remaining)
 
-      // 🛑 Deja de escribir
-      try { await sock.sendPresenceUpdate("paused", from) } catch {}
+      try {
+        await socket.sendPresenceUpdate("paused", from)
+      } catch {}
 
-      // Guardar historial
       chatHistory[from].push({ role: "assistant", content: reply })
       if (chatHistory[from].length > 10) chatHistory[from] = chatHistory[from].slice(-10)
 
-      // 📤 Enviar mensaje
-      await sock.sendMessage(from, { text: reply })
-      safeBroadcast("outgoing", { to: from, message: reply })
+      await socket.sendMessage(from, { text: reply })
+      global.broadcast?.("outgoing", { to: from, message: reply })
 
       console.log("📤 Respondido:", reply)
 
-      // 🧹 Limpieza
       clearTimeout(typingTimers[from])
       delete typingTimers[from]
     }, 9000)

@@ -3,31 +3,34 @@ if (!localStorage.getItem("auth")) {
   window.location = "login.html"
 }
 
-const ws = new WebSocket(
-  location.origin.replace("http", "ws")
-)
+const ws = new WebSocket(location.origin.replace("http", "ws"))
 
 ws.onmessage = (event) => {
-  const data = JSON.parse(event.data)
+  const msg = JSON.parse(event.data)
 
-  // Estado de conexión
-  if (data.type === "connected") {
-    setStatus(data.data ? "Conectado" : "Desconectado")
+  // Estado de conexión (nuevo)
+  if (msg.type === "connected") {
+    setStatus(msg.data ? "Conectado" : "Desconectado")
   }
 
-  // Mostrar QR
-  if (data.type === "qr") {
-    showQR(data.data)
+  // Compatibilidad por si algún log viejo manda "status"
+  if (msg.type === "status") {
+    setStatus(msg.data?.connected ? "Conectado" : "Desconectado")
+  }
+
+  // Mostrar QR: ahora llega string directo (o null)
+  if (msg.type === "qr") {
+    if (msg.data) showQR(msg.data)
   }
 
   // Último entrante
-  if (data.type === "incoming") {
-    document.getElementById("incoming").innerText = data.data.message
+  if (msg.type === "incoming") {
+    document.getElementById("incoming").innerText = msg.data.message
   }
 
   // Último saliente
-  if (data.type === "outgoing") {
-    document.getElementById("outgoing").innerText = data.data.message
+  if (msg.type === "outgoing") {
+    document.getElementById("outgoing").innerText = msg.data.message
   }
 }
 
@@ -65,7 +68,10 @@ function showQR(qr) {
   const img = document.getElementById("qrImg")
   const noQR = document.getElementById("noQR")
 
-  img.src = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" + encodeURIComponent(qr)
+  img.src =
+    "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" +
+    encodeURIComponent(qr)
+
   img.classList.remove("hidden")
   noQR.classList.add("hidden")
 }
